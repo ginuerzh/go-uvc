@@ -84,14 +84,18 @@ func main() {
 	}
 	defer stream.Stop()
 
-	select {
-	case frame := <-cf:
-		log.Printf("got image: %d, %dx%d, %s",
-			frame.Sequence, frame.Width, frame.Height, frame.CaptureTime)
-		if err := writeFrameFile(frame, fmt.Sprintf("frame%d.jpg", frame.Sequence)); err != nil {
-			log.Fatal("write frame:", err)
+	// stream for 10 seconds
+	for {
+		select {
+		case frame := <-cf:
+			log.Printf("got image: %d, %dx%d, %s",
+				frame.Sequence, frame.Width, frame.Height, frame.CaptureTime)
+			if err := writeFrameFile(frame, fmt.Sprintf("frame%d.jpg", frame.Sequence)); err != nil {
+				log.Fatal("write frame:", err)
+			}
+		case <-time.After(10 * time.Second):
+			return
 		}
-	case <-time.After(10 * time.Second):
 	}
 }
 
