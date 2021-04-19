@@ -1,8 +1,7 @@
 package uvc
 
 /*
-#include <libuvc/libuvc.h>
-#include <stdio.h>
+#include <libuvc-binding.h>
 
 static inline const uvc_frame_desc_t* uvc_get_frame_desc(uvc_format_desc_t* format_desc) {
 	return format_desc->frame_descs;
@@ -124,9 +123,11 @@ func (dev *Device) GetFormatDesc() *FormatDescriptor {
 	}
 }
 
+/*
 func (dev *Device) Diag() {
 	C.uvc_print_diag(dev.handle, C.stderr)
 }
+*/
 
 func (dev *Device) Descriptor() (*DeviceDescriptor, error) {
 	if dev.dev == nil {

@@ -35,7 +35,7 @@ func main() {
 	defer dev.Close()
 	log.Println("device opened")
 
-	dev.Diag()
+	// dev.Diag()
 
 	if err := dev.SetAEMode(gouvc.AEModeManual); err != nil {
 		log.Fatal("set ae mode:", err)

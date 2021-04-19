@@ -1,7 +1,7 @@
 package uvc
 
 /*
-#include <libuvc/libuvc.h>
+#include <libuvc-binding.h>
 
 void frame_cb(uvc_frame_t *frame, void *ptr);
 */

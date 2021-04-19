@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// #include <libuvc/libuvc.h>
+// #include <libuvc-binding.h>
 import "C"
 
 type ErrorType C.enum_uvc_error

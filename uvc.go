@@ -1,7 +1,6 @@
 package uvc
 
-// #cgo LDFLAGS: -luvc
-// #include <libuvc/libuvc.h>
+// #include <libuvc-binding.h>
 // #include <stdlib.h>
 import "C"
 import "unsafe"

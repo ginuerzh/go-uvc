@@ -1,6 +1,6 @@
 package uvc
 
-// #include <libuvc/libuvc.h>
+// #include <libuvc-binding.h>
 import "C"
 import (
 	"bytes"
