@@ -1,7 +1,11 @@
 package main
 
 import (
+	"fmt"
+	"io"
 	"log"
+	"os"
+	"time"
 
 	gouvc "github.com/ginuerzh/go-uvc"
 )
@@ -21,7 +25,9 @@ func main() {
 		log.Fatal("find device: ", err)
 	}
 	defer dev.Unref()
-	log.Println("device found")
+
+	info, _ := dev.Info()
+	log.Println("device found:\n", info)
 
 	if err := dev.Open(); err != nil {
 		log.Fatal(err)
@@ -31,16 +37,14 @@ func main() {
 
 	dev.Diag()
 
-	info, err := dev.Info()
-	log.Printf("find device: %04x:%04x (%s, %s)",
-		info.VendorID, info.ProductID, info.Manufacturer, info.Product)
-
 	if err := dev.SetAEMode(gouvc.AEModeManual); err != nil {
 		log.Fatal("set ae mode:", err)
 	}
 
 	var frameFormat gouvc.FrameFormat
 	formatDesc := dev.GetFormatDesc()
+	log.Println("format desc:\n", formatDesc)
+
 	switch formatDesc.Subtype {
 	case gouvc.VS_FORMAT_MJPEG:
 		frameFormat = gouvc.FRAME_FORMAT_MJPEG
@@ -55,12 +59,11 @@ func main() {
 	fps := 30
 
 	if frameDesc := formatDesc.FrameDesc(); frameDesc != nil {
+		log.Println("frame desc:\n", frameDesc)
 		width = int(frameDesc.Width)
 		height = int(frameDesc.Height)
 		fps = int(10000000 / frameDesc.DefaultFrameInterval)
 	}
-
-	log.Printf("First format: %dx%d %dfps", width, height, fps)
 
 	stream, err := dev.GetStream(frameFormat, width, height, fps)
 	if err != nil {
@@ -68,7 +71,7 @@ func main() {
 	}
 
 	ctrl := stream.Ctrl()
-	log.Println(ctrl.String())
+	log.Println("stream ctrl:\n", ctrl.String())
 
 	if err := stream.Open(); err != nil {
 		log.Fatal("open stream:", err)
@@ -81,7 +84,24 @@ func main() {
 	}
 	defer stream.Stop()
 
-	for frame := range cf {
-		log.Println("got image:", frame.Width, frame.Height)
+	select {
+	case frame := <-cf:
+		log.Printf("got image: %d, %dx%d, %s",
+			frame.Sequence, frame.Width, frame.Height, frame.CaptureTime)
+		if err := writeFrameFile(frame, fmt.Sprintf("frame%d.jpg", frame.Sequence)); err != nil {
+			log.Fatal("write frame:", err)
+		}
+	case <-time.After(10 * time.Second):
 	}
+}
+
+func writeFrameFile(r io.ReadCloser, name string) error {
+	defer r.Close()
+
+	f, err := os.Create(name)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(f, r)
+	return err
 }

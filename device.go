@@ -11,7 +11,10 @@ static inline const uvc_frame_desc_t* uvc_get_frame_desc(uvc_format_desc_t* form
 import "C"
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
+	"sync"
 	"unsafe"
 )
 
@@ -27,6 +30,11 @@ const (
 	AEModeShutterPriority AEMode = 4
 	// auto exposure time, manual iris
 	AEModeAperturePriority AEMode = 8
+)
+
+var (
+	ErrDeviceClosed   = errors.New("device closed")
+	ErrDeviceNotFound = errors.New("device not found")
 )
 
 // VideoStreaming interface descriptor subtype.
@@ -52,15 +60,35 @@ const (
 type Device struct {
 	dev    *C.uvc_device_t
 	handle *C.uvc_device_handle_t
+	opened bool
+	mu     sync.RWMutex
 }
 
 // Ope opens a UVC device.
 func (dev *Device) Open() error {
+	dev.mu.Lock()
+	defer dev.mu.Unlock()
+
+	if dev.opened {
+		return nil
+	}
+
 	r := C.uvc_open(dev.dev, &dev.handle)
-	return newError(ErrorType(r))
+	if err := newError(ErrorType(r)); err != nil {
+		return err
+	}
+	dev.opened = true
+	return nil
 }
 
 func (dev *Device) SetAEMode(mode AEMode) error {
+	dev.mu.RLock()
+	defer dev.mu.RUnlock()
+
+	if !dev.opened {
+		return ErrDeviceClosed
+	}
+
 	r := C.uvc_set_ae_mode(dev.handle, C.uchar(mode))
 	return newError(ErrorType(r))
 }
@@ -101,8 +129,8 @@ func (dev *Device) Diag() {
 }
 
 func (dev *Device) Info() (*DeviceInfo, error) {
-	if dev.handle == nil {
-		return nil, errors.New("device closed")
+	if dev.dev == nil {
+		return nil, ErrDeviceNotFound
 	}
 
 	var desc *C.uvc_device_descriptor_t
@@ -125,6 +153,13 @@ func (dev *Device) Info() (*DeviceInfo, error) {
 
 // GetStream gets a negotiated streaming control block for some common parameters.
 func (dev *Device) GetStream(format FrameFormat, width, height, fps int) (*Stream, error) {
+	dev.mu.RLock()
+	defer dev.mu.RUnlock()
+
+	if !dev.opened {
+		return nil, ErrDeviceClosed
+	}
+
 	var ctrl C.uvc_stream_ctrl_t
 	r := C.uvc_get_stream_ctrl_format_size(dev.handle, &ctrl,
 		C.enum_uvc_frame_format(format),
@@ -135,17 +170,30 @@ func (dev *Device) GetStream(format FrameFormat, width, height, fps int) (*Strea
 	return &Stream{
 		devh: dev.handle,
 		ctrl: ctrl,
-		fc:   make(chan *Frame),
 	}, nil
 }
 
 // Ref increments the reference count for a device.
 func (dev *Device) Ref() {
+	dev.mu.RLock()
+	defer dev.mu.RUnlock()
+
+	if !dev.opened {
+		return
+	}
+
 	C.uvc_ref_device(dev.dev)
 }
 
 // Unref decrements the reference count for a device.
 func (dev *Device) Unref() {
+	dev.mu.RLock()
+	defer dev.mu.RUnlock()
+
+	if !dev.opened {
+		return
+	}
+
 	C.uvc_unref_device(dev.dev)
 }
 
@@ -153,8 +201,20 @@ func (dev *Device) Unref() {
 // Ends any stream that's in progress.
 // The device handle and frame structures will be invalidated.
 func (dev *Device) Close() error {
+	dev.mu.Lock()
+	defer dev.mu.Unlock()
+
 	C.uvc_close(dev.handle)
+	dev.opened = false
+
 	return nil
+}
+
+func (dev *Device) IsClosed() bool {
+	dev.mu.RLock()
+	defer dev.mu.RUnlock()
+
+	return !dev.opened
 }
 
 type DeviceInfo struct {
@@ -164,6 +224,17 @@ type DeviceInfo struct {
 	SerialNumber string
 	Manufacturer string
 	Product      string
+}
+
+func (di *DeviceInfo) String() string {
+	buf := &bytes.Buffer{}
+	fmt.Fprintf(buf, "VendorID: %04x\n", di.VendorID)
+	fmt.Fprintf(buf, "ProductID: %04x\n", di.ProductID)
+	fmt.Fprintf(buf, "SerialNumber: %s\n", di.SerialNumber)
+	fmt.Fprintf(buf, "BcdUVC: %d\n", di.BcdUVC)
+	fmt.Fprintf(buf, "Manufacturer: %s\n", di.Manufacturer)
+	fmt.Fprintf(buf, "Product: %s\n", di.Product)
+	return buf.String()
 }
 
 // device format descriptor.
@@ -213,6 +284,22 @@ func (d *FormatDescriptor) FrameDesc() *FrameDescriptor {
 	}
 }
 
+func (d *FormatDescriptor) String() string {
+	buf := &bytes.Buffer{}
+	fmt.Fprintf(buf, "Subtype: %d\n", d.Subtype)
+	fmt.Fprintf(buf, "FormatIndex: %d\n", d.FormatIndex)
+	fmt.Fprintf(buf, "NumFrameDescriptors: %d\n", d.NumFrameDescriptors)
+	fmt.Fprintf(buf, "BitsPerPixel: %d\n", d.BitsPerPixel)
+	fmt.Fprintf(buf, "Flags: %d\n", d.Flags)
+	fmt.Fprintf(buf, "DefaultFrameIndex: %d\n", d.DefaultFrameIndex)
+	fmt.Fprintf(buf, "AspectRatioX: %d\n", d.AspectRatioX)
+	fmt.Fprintf(buf, "AspectRatioY: %d\n", d.AspectRatioY)
+	fmt.Fprintf(buf, "InterlaceFlags: %d\n", d.InterlaceFlags)
+	fmt.Fprintf(buf, "CopyProtect: %d\n", d.CopyProtect)
+	fmt.Fprintf(buf, "VariableSize: %d\n", d.VariableSize)
+	return buf.String()
+}
+
 // Frame descriptor.
 // A "frame" is a configuration of a streaming format
 // for a particular image size at one of possibly several available frame rates.
@@ -247,4 +334,24 @@ type FrameDescriptor struct {
 	BytesPerLine uint32
 	// Available frame rates, zero-terminated (in 100ns units)
 	Intervals []uint32
+}
+
+func (d *FrameDescriptor) String() string {
+	buf := &bytes.Buffer{}
+	fmt.Fprintf(buf, "Subtype: %d\n", d.Subtype)
+	fmt.Fprintf(buf, "FrameIndex: %d\n", d.FrameIndex)
+	fmt.Fprintf(buf, "Capabilities: %d\n", d.Capabilities)
+	fmt.Fprintf(buf, "Width: %d\n", d.Width)
+	fmt.Fprintf(buf, "Height: %d\n", d.Height)
+	fmt.Fprintf(buf, "MinBitRate: %d\n", d.MinBitRate)
+	fmt.Fprintf(buf, "MaxBitRate: %d\n", d.MaxBitRate)
+	fmt.Fprintf(buf, "MaxVideoFrameBufferSize: %d\n", d.MaxVideoFrameBufferSize)
+	fmt.Fprintf(buf, "DefaultFrameInterval: %d\n", d.DefaultFrameInterval)
+	fmt.Fprintf(buf, "MinFrameInterval: %d\n", d.MinFrameInterval)
+	fmt.Fprintf(buf, "MaxFrameInterval: %d\n", d.MaxFrameInterval)
+	fmt.Fprintf(buf, "FrameIntervalStep: %d\n", d.FrameIntervalStep)
+	fmt.Fprintf(buf, "FrameIntervalType: %d\n", d.FrameIntervalType)
+	fmt.Fprintf(buf, "BytesPerLine: %d\n", d.BytesPerLine)
+
+	return buf.String()
 }

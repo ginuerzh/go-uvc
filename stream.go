@@ -6,12 +6,19 @@ package uvc
 void frame_cb(uvc_frame_t *frame, void *ptr);
 */
 import "C"
+
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"sync"
 	"unsafe"
 
 	"github.com/mattn/go-pointer"
+)
+
+var (
+	ErrStreamClosed = errors.New("stream closed")
 )
 
 type Stream struct {
@@ -20,16 +27,38 @@ type Stream struct {
 	handle *C.uvc_stream_handle_t
 	fc     chan *Frame
 	p      unsafe.Pointer
+	opened bool
+	mu     sync.RWMutex
 }
 
 // Open opens a new video stream.
 func (s *Stream) Open() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.opened {
+		return nil
+	}
+
 	r := C.uvc_stream_open_ctrl(s.devh, &s.handle, &s.ctrl)
-	return newError(ErrorType(r))
+	if err := newError(ErrorType(r)); err != nil {
+		return err
+	}
+
+	s.fc = make(chan *Frame)
+	s.opened = true
+	return nil
 }
 
-// Start begin streaming video from the device into the callback function.
+// Start begins streaming video from the device into frame channel.
 func (s *Stream) Start() (<-chan *Frame, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if !s.opened {
+		return nil, ErrStreamClosed
+	}
+
 	s.p = pointer.Save(s.fc)
 	r := C.uvc_stream_start(s.handle,
 		(*C.uvc_frame_callback_t)(unsafe.Pointer(C.frame_cb)), s.p, 0)
@@ -41,27 +70,38 @@ func (s *Stream) Start() (<-chan *Frame, error) {
 }
 
 func (s *Stream) Stop() error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if !s.opened {
+		return ErrStreamClosed
+	}
+
 	pointer.Unref(s.p)
 	r := C.uvc_stream_stop(s.handle)
 	return newError(ErrorType(r))
 }
 
 func (s *Stream) Close() error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if !s.opened {
+		return nil
+	}
+
 	C.uvc_stream_close(s.handle)
+	close(s.fc)
+	s.opened = false
+
 	return nil
 }
 
-//export goFrameCB
-func goFrameCB(frame *C.struct_uvc_frame, p unsafe.Pointer) {
-	fc := pointer.Restore(p).(chan *Frame)
-	fr := &Frame{
-		Width:  int(frame.width),
-		Height: int(frame.height),
-	}
-	select {
-	case fc <- fr:
-	default:
-	}
+func (s *Stream) IsClosed() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return !s.opened
 }
 
 func (s *Stream) Ctrl() *StreamCtrl {
@@ -108,7 +148,7 @@ type StreamCtrl struct {
 
 func (sc *StreamCtrl) String() string {
 	buf := &bytes.Buffer{}
-	fmt.Fprintf(buf, "\nHint: %04x\n", sc.Hint)
+	fmt.Fprintf(buf, "Hint: %04x\n", sc.Hint)
 	fmt.Fprintf(buf, "FormatIndex: %d\n", sc.FormatIndex)
 	fmt.Fprintf(buf, "FrameIndex: %d\n", sc.FrameIndex)
 	fmt.Fprintf(buf, "FrameInterval: %d\n", sc.FrameInterval)
