@@ -128,7 +128,7 @@ func (dev *Device) Diag() {
 	C.uvc_print_diag(dev.handle, C.stderr)
 }
 
-func (dev *Device) Info() (*DeviceInfo, error) {
+func (dev *Device) Descriptor() (*DeviceDescriptor, error) {
 	if dev.dev == nil {
 		return nil, ErrDeviceNotFound
 	}
@@ -140,7 +140,7 @@ func (dev *Device) Info() (*DeviceInfo, error) {
 	}
 	defer C.uvc_free_device_descriptor(desc)
 
-	info := &DeviceInfo{
+	info := &DeviceDescriptor{
 		VendorID:     uint16(desc.idVendor),
 		ProductID:    uint16(desc.idProduct),
 		BcdUVC:       uint16(desc.bcdUVC),
@@ -217,7 +217,7 @@ func (dev *Device) IsClosed() bool {
 	return !dev.opened
 }
 
-type DeviceInfo struct {
+type DeviceDescriptor struct {
 	VendorID     uint16
 	ProductID    uint16
 	BcdUVC       uint16
@@ -226,14 +226,14 @@ type DeviceInfo struct {
 	Product      string
 }
 
-func (di *DeviceInfo) String() string {
+func (d *DeviceDescriptor) String() string {
 	buf := &bytes.Buffer{}
-	fmt.Fprintf(buf, "VendorID: %04x\n", di.VendorID)
-	fmt.Fprintf(buf, "ProductID: %04x\n", di.ProductID)
-	fmt.Fprintf(buf, "SerialNumber: %s\n", di.SerialNumber)
-	fmt.Fprintf(buf, "BcdUVC: %d\n", di.BcdUVC)
-	fmt.Fprintf(buf, "Manufacturer: %s\n", di.Manufacturer)
-	fmt.Fprintf(buf, "Product: %s\n", di.Product)
+	fmt.Fprintf(buf, "VendorID: %04x\n", d.VendorID)
+	fmt.Fprintf(buf, "ProductID: %04x\n", d.ProductID)
+	fmt.Fprintf(buf, "SerialNumber: %s\n", d.SerialNumber)
+	fmt.Fprintf(buf, "BcdUVC: %d\n", d.BcdUVC)
+	fmt.Fprintf(buf, "Manufacturer: %s\n", d.Manufacturer)
+	fmt.Fprintf(buf, "Product: %s\n", d.Product)
 	return buf.String()
 }
 

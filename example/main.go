@@ -26,8 +26,8 @@ func main() {
 	}
 	defer dev.Unref()
 
-	info, _ := dev.Info()
-	log.Println("device found:\n", info)
+	desc, _ := dev.Descriptor()
+	log.Println("device found:\n", desc)
 
 	if err := dev.Open(); err != nil {
 		log.Fatal(err)
@@ -85,6 +85,7 @@ func main() {
 	defer stream.Stop()
 
 	// stream for 10 seconds
+	tc := time.After(10 * time.Second)
 	for {
 		select {
 		case frame := <-cf:
@@ -93,7 +94,7 @@ func main() {
 			if err := writeFrameFile(frame, fmt.Sprintf("frame%d.jpg", frame.Sequence)); err != nil {
 				log.Fatal("write frame:", err)
 			}
-		case <-time.After(10 * time.Second):
+		case <-tc:
 			return
 		}
 	}
