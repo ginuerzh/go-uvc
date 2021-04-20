@@ -20,6 +20,12 @@ func main() {
 	defer uvc.Exit()
 	log.Println("UVC initialized")
 
+	devs, err := uvc.GetDevices()
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Println("devices:", len(devs))
+
 	dev, err := uvc.FindDevice(0, 0, "")
 	if err != nil {
 		log.Fatal("find device: ", err)
@@ -41,31 +47,46 @@ func main() {
 		log.Fatal("set ae mode:", err)
 	}
 
-	var frameFormat gouvc.FrameFormat
-	formatDesc := dev.GetFormatDesc()
-	log.Println("format desc:\n", formatDesc)
-
-	switch formatDesc.Subtype {
-	case gouvc.VS_FORMAT_MJPEG:
-		frameFormat = gouvc.FRAME_FORMAT_MJPEG
-	case gouvc.VS_FORMAT_FRAME_BASED:
-		// frameFormat = gouvc.FRAME_FORMAT_H264
-	default:
-		frameFormat = gouvc.FRAME_FORMAT_YUYV
+	ci := dev.ControlInterface()
+	log.Println("device control interface:\n", ci)
+	for i, si := range dev.StreamInterfaces() {
+		log.Printf("stream interface: %d\n%s", i, si.String())
+		for j, formatDesc := range si.FormatDescriptors() {
+			log.Printf("format descriptor: %d\n%s", j, formatDesc.String())
+			for k, frameDesc := range formatDesc.FrameDescriptors() {
+				log.Printf("frame descriptor: %d\n%s", k, frameDesc.String())
+			}
+		}
 	}
 
-	width := 640
-	height := 480
-	fps := 30
+	var frameFormat gouvc.FrameFormat = gouvc.FRAME_FORMAT_MJPEG
+	/*
+		// formatDesc := dev.FormatDescriptors()
+		// log.Println("format desc:\n", formatDesc)
 
-	if frameDesc := formatDesc.FrameDesc(); frameDesc != nil {
-		log.Println("frame desc:\n", frameDesc)
-		width = int(frameDesc.Width)
-		height = int(frameDesc.Height)
-		fps = int(10000000 / frameDesc.DefaultFrameInterval)
-	}
+		switch formatDesc.Subtype {
+		case gouvc.VS_FORMAT_MJPEG:
+			frameFormat = gouvc.FRAME_FORMAT_MJPEG
+		case gouvc.VS_FORMAT_FRAME_BASED:
+			// frameFormat = gouvc.FRAME_FORMAT_H264
+		default:
+			frameFormat = gouvc.FRAME_FORMAT_YUYV
+		}
 
-	stream, err := dev.GetStream(frameFormat, width, height, fps)
+		width := 640
+		height := 480
+		fps := 30
+
+		for _, frameDesc := range formatDesc.FrameDescriptors() {
+			log.Println("frame desc:\n", frameDesc)
+
+			if width == int(frameDesc.Width) && height == int(frameDesc.Height) {
+				fps = int(10000000 / frameDesc.DefaultFrameInterval)
+			}
+		}
+	*/
+
+	stream, err := dev.GetStream(frameFormat, 1920, 1080, 25)
 	if err != nil {
 		log.Fatal("get stream:", err)
 	}

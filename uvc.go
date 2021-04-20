@@ -1,12 +1,19 @@
 package uvc
 
-// #include <libuvc-binding.h>
-// #include <stdlib.h>
+/*
+#include <libuvc-cgo.h>
+#include <stdlib.h>
+*/
 import "C"
-import "unsafe"
+import (
+	"unsafe"
+
+	"github.com/mattn/go-pointer"
+)
 
 type UVC struct {
-	ctx *C.uvc_context_t
+	ctx     *C.uvc_context_t
+	devices []*Device
 }
 
 // Init initializes a UVC service context.
@@ -30,6 +37,28 @@ func (uvc *UVC) FindDevice(vid, pid int, sn string) (*Device, error) {
 		return nil, err
 	}
 	return &Device{dev: dev}, nil
+}
+
+//export go_device_cb
+func go_device_cb(device *C.uvc_device_t, index C.int, p unsafe.Pointer) {
+	uvc := pointer.Restore(p).(*UVC)
+
+	uvc.devices = append(uvc.devices, &Device{dev: device})
+}
+
+func (uvc *UVC) GetDevices() ([]*Device, error) {
+	uvc.devices = nil
+
+	p := pointer.Save(uvc)
+	defer pointer.Unref(p)
+
+	r := C.cgo_uvc_get_device_list(uvc.ctx,
+		(*C.cgo_uvc_device_callback_t)(unsafe.Pointer(C.cgo_device_cb)), p)
+	if err := newError(ErrorType(r)); err != nil {
+		return nil, err
+	}
+
+	return uvc.devices, nil
 }
 
 // Exit closes the UVC context, shutting down any active devices.

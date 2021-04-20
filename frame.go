@@ -74,8 +74,8 @@ func (fr *Frame) Read(b []byte) (int, error) {
 	return fr.data.Read(b)
 }
 
-//export goFrameCB
-func goFrameCB(frame *C.struct_uvc_frame, p unsafe.Pointer) {
+//export go_frame_cb
+func go_frame_cb(frame *C.struct_uvc_frame, p unsafe.Pointer) {
 	fc := pointer.Restore(p).(chan *Frame)
 
 	switch FrameFormat(frame.frame_format) {

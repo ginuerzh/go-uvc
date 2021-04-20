@@ -1,9 +1,7 @@
 package uvc
 
 /*
-#include <libuvc-binding.h>
-
-void frame_cb(uvc_frame_t *frame, void *ptr);
+#include <libuvc-cgo.h>
 */
 import "C"
 
@@ -23,11 +21,10 @@ var (
 
 type Stream struct {
 	devh   *C.uvc_device_handle_t
-	ctrl   C.uvc_stream_ctrl_t
 	handle *C.uvc_stream_handle_t
+	ctrl   C.uvc_stream_ctrl_t
 	fc     chan *Frame
 	p      unsafe.Pointer
-	opened bool
 	mu     sync.RWMutex
 }
 
@@ -36,7 +33,7 @@ func (s *Stream) Open() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.opened {
+	if s.handle != nil {
 		return nil
 	}
 
@@ -46,7 +43,6 @@ func (s *Stream) Open() error {
 	}
 
 	s.fc = make(chan *Frame)
-	s.opened = true
 	return nil
 }
 
@@ -55,13 +51,13 @@ func (s *Stream) Start() (<-chan *Frame, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if !s.opened {
+	if s.handle == nil {
 		return nil, ErrStreamClosed
 	}
 
 	s.p = pointer.Save(s.fc)
 	r := C.uvc_stream_start(s.handle,
-		(*C.uvc_frame_callback_t)(unsafe.Pointer(C.frame_cb)), s.p, 0)
+		(*C.uvc_frame_callback_t)(unsafe.Pointer(C.cgo_frame_cb)), s.p, 0)
 	if err := newError(ErrorType(r)); err != nil {
 		return nil, err
 	}
@@ -73,7 +69,7 @@ func (s *Stream) Stop() error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	if !s.opened {
+	if s.handle == nil {
 		return ErrStreamClosed
 	}
 
@@ -83,16 +79,16 @@ func (s *Stream) Stop() error {
 }
 
 func (s *Stream) Close() error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	if !s.opened {
+	if s.handle == nil {
 		return nil
 	}
 
 	C.uvc_stream_close(s.handle)
+	s.handle = nil
 	close(s.fc)
-	s.opened = false
 
 	return nil
 }
@@ -101,7 +97,7 @@ func (s *Stream) IsClosed() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return !s.opened
+	return s.handle == nil
 }
 
 func (s *Stream) Ctrl() *StreamCtrl {

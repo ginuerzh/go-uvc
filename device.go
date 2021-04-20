@@ -1,11 +1,7 @@
 package uvc
 
 /*
-#include <libuvc-binding.h>
-
-static inline const uvc_frame_desc_t* uvc_get_frame_desc(uvc_format_desc_t* format_desc) {
-	return format_desc->frame_descs;
-}
+#include <libuvc-cgo.h>
 */
 import "C"
 
@@ -59,7 +55,6 @@ const (
 type Device struct {
 	dev    *C.uvc_device_t
 	handle *C.uvc_device_handle_t
-	opened bool
 	mu     sync.RWMutex
 }
 
@@ -68,7 +63,7 @@ func (dev *Device) Open() error {
 	dev.mu.Lock()
 	defer dev.mu.Unlock()
 
-	if dev.opened {
+	if dev.handle != nil {
 		return nil
 	}
 
@@ -76,7 +71,6 @@ func (dev *Device) Open() error {
 	if err := newError(ErrorType(r)); err != nil {
 		return err
 	}
-	dev.opened = true
 	return nil
 }
 
@@ -84,7 +78,7 @@ func (dev *Device) SetAEMode(mode AEMode) error {
 	dev.mu.RLock()
 	defer dev.mu.RUnlock()
 
-	if !dev.opened {
+	if dev.handle == nil {
 		return ErrDeviceClosed
 	}
 
@@ -102,32 +96,41 @@ func (dev *Device) GetAddress() uint8 {
 	return uint8(C.uvc_get_device_address(dev.dev))
 }
 
-func (dev *Device) GetFormatDesc() *FormatDescriptor {
-	desc := C.uvc_get_format_descs(dev.handle)
-	if desc == nil {
+func (dev *Device) ControlInterface() *ControlInterface {
+	dev.mu.RLock()
+	defer dev.mu.RUnlock()
+
+	if dev.handle == nil {
 		return nil
 	}
-	return &FormatDescriptor{
-		desc:                desc,
-		Subtype:             VSDescSubType(desc.bDescriptorSubtype),
-		FormatIndex:         uint8(desc.bFormatIndex),
-		NumFrameDescriptors: uint8(desc.bNumFrameDescriptors),
-		BitsPerPixel:        *(*uint8)(unsafe.Pointer(&desc.anon1[0])),
-		Flags:               *(*uint8)(unsafe.Pointer(&desc.anon1[0])),
-		DefaultFrameIndex:   uint8(desc.bDefaultFrameIndex),
-		AspectRatioX:        uint8(desc.bAspectRatioX),
-		AspectRatioY:        uint8(desc.bAspectRatioY),
-		InterlaceFlags:      uint8(desc.bmInterlaceFlags),
-		CopyProtect:         uint8(desc.bCopyProtect),
-		VariableSize:        uint8(desc.bVariableSize),
+
+	return &ControlInterface{
+		itf:             dev.handle.info.ctrl_if,
+		BcdUVC:          uint16(dev.handle.info.ctrl_if.bcdUVC),
+		Number:          uint8(dev.handle.info.ctrl_if.bInterfaceNumber),
+		EndpointAddress: uint8(dev.handle.info.ctrl_if.bEndpointAddress),
+		ClockFrequency:  uint32(dev.handle.info.ctrl_if.dwClockFrequency),
 	}
 }
 
-/*
-func (dev *Device) Diag() {
-	C.uvc_print_diag(dev.handle, C.stderr)
+func (dev *Device) StreamInterfaces() (ifs []*StreamInterface) {
+	dev.mu.RLock()
+	defer dev.mu.RUnlock()
+
+	if dev.handle == nil {
+		return
+	}
+
+	for itf := dev.handle.info.stream_ifs; itf != nil; itf = itf.next {
+		ifs = append(ifs, &StreamInterface{
+			itf:             itf,
+			Number:          uint8(itf.bInterfaceNumber),
+			EndpointAddress: uint8(itf.bEndpointAddress),
+			TerminalLink:    uint8(itf.bTerminalLink),
+		})
+	}
+	return
 }
-*/
 
 func (dev *Device) Descriptor() (*DeviceDescriptor, error) {
 	if dev.dev == nil {
@@ -157,7 +160,7 @@ func (dev *Device) GetStream(format FrameFormat, width, height, fps int) (*Strea
 	dev.mu.RLock()
 	defer dev.mu.RUnlock()
 
-	if !dev.opened {
+	if dev.handle == nil {
 		return nil, ErrDeviceClosed
 	}
 
@@ -179,7 +182,7 @@ func (dev *Device) Ref() {
 	dev.mu.RLock()
 	defer dev.mu.RUnlock()
 
-	if !dev.opened {
+	if dev.handle == nil {
 		return
 	}
 
@@ -191,7 +194,7 @@ func (dev *Device) Unref() {
 	dev.mu.RLock()
 	defer dev.mu.RUnlock()
 
-	if !dev.opened {
+	if dev.handle == nil {
 		return
 	}
 
@@ -206,16 +209,23 @@ func (dev *Device) Close() error {
 	defer dev.mu.Unlock()
 
 	C.uvc_close(dev.handle)
-	dev.opened = false
+	dev.handle = nil
 
 	return nil
+}
+
+func (dev *Device) IsIdle() bool {
+	dev.mu.RLock()
+	defer dev.mu.RUnlock()
+
+	return dev.handle == nil || dev.handle.streams == nil
 }
 
 func (dev *Device) IsClosed() bool {
 	dev.mu.RLock()
 	defer dev.mu.RUnlock()
 
-	return !dev.opened
+	return dev.handle == nil
 }
 
 type DeviceDescriptor struct {
@@ -235,6 +245,67 @@ func (d *DeviceDescriptor) String() string {
 	fmt.Fprintf(buf, "BcdUVC: %d\n", d.BcdUVC)
 	fmt.Fprintf(buf, "Manufacturer: %s\n", d.Manufacturer)
 	fmt.Fprintf(buf, "Product: %s\n", d.Product)
+	return buf.String()
+}
+
+// VideoControl interface.
+type ControlInterface struct {
+	itf             C.uvc_control_interface_t
+	BcdUVC          uint16
+	Number          uint8
+	EndpointAddress uint8
+	ClockFrequency  uint32
+}
+
+func (i *ControlInterface) String() string {
+	buf := &bytes.Buffer{}
+	fmt.Fprintf(buf, "bcdUVC: %d\n", i.BcdUVC)
+	fmt.Fprintf(buf, "InterfaceNumber: %d\n", i.Number)
+	fmt.Fprintf(buf, "EndpointAddress: %d\n", i.EndpointAddress)
+	fmt.Fprintf(buf, "ClockFrequency: %d\n", i.ClockFrequency)
+	return buf.String()
+}
+
+// VideoStream interface.
+type StreamInterface struct {
+	itf *C.uvc_streaming_interface_t
+	// Interface number
+	Number uint8
+	// USB endpoint to use when communicating with this interface
+	EndpointAddress uint8
+	TerminalLink    uint8
+}
+
+func (i *StreamInterface) FormatDescriptors() (descs []*FormatDescriptor) {
+	if i.itf == nil {
+		return
+	}
+
+	for desc := i.itf.format_descs; desc != nil; desc = desc.next {
+		descs = append(descs, &FormatDescriptor{
+			desc:                desc,
+			Subtype:             VSDescSubType(desc.bDescriptorSubtype),
+			FormatIndex:         uint8(desc.bFormatIndex),
+			NumFrameDescriptors: uint8(desc.bNumFrameDescriptors),
+			BitsPerPixel:        *(*uint8)(unsafe.Pointer(&desc.anon1[0])),
+			Flags:               *(*uint8)(unsafe.Pointer(&desc.anon1[0])),
+			DefaultFrameIndex:   uint8(desc.bDefaultFrameIndex),
+			AspectRatioX:        uint8(desc.bAspectRatioX),
+			AspectRatioY:        uint8(desc.bAspectRatioY),
+			InterlaceFlags:      uint8(desc.bmInterlaceFlags),
+			CopyProtect:         uint8(desc.bCopyProtect),
+			VariableSize:        uint8(desc.bVariableSize),
+		})
+	}
+	return
+}
+
+func (i *StreamInterface) String() string {
+	buf := &bytes.Buffer{}
+	fmt.Fprintf(buf, "InterfaceNumber: %d\n", i.Number)
+	fmt.Fprintf(buf, "EndpointAddress: %d\n", i.EndpointAddress)
+	fmt.Fprintf(buf, "TerminalLink: %d\n", i.TerminalLink)
+
 	return buf.String()
 }
 
@@ -260,29 +331,31 @@ type FormatDescriptor struct {
 	VariableSize      uint8
 }
 
-func (d *FormatDescriptor) FrameDesc() *FrameDescriptor {
-	desc := C.uvc_get_frame_desc(d.desc)
-	if desc == nil {
-		return nil
+func (d *FormatDescriptor) FrameDescriptors() (descs []*FrameDescriptor) {
+	if d.desc == nil {
+		return
 	}
-	return &FrameDescriptor{
-		desc:                    desc,
-		Subtype:                 VSDescSubType(desc.bDescriptorSubtype),
-		FrameIndex:              uint8(desc.bFrameIndex),
-		Capabilities:            uint8(desc.bmCapabilities),
-		Width:                   uint16(desc.wWidth),
-		Height:                  uint16(desc.wHeight),
-		MinBitRate:              uint32(desc.dwMinBitRate),
-		MaxBitRate:              uint32(desc.dwMaxBitRate),
-		MaxVideoFrameBufferSize: uint32(desc.dwMaxVideoFrameBufferSize),
-		DefaultFrameInterval:    uint32(desc.dwDefaultFrameInterval),
-		MinFrameInterval:        uint32(desc.dwMinFrameInterval),
-		MaxFrameInterval:        uint32(desc.dwMaxFrameInterval),
-		FrameIntervalStep:       uint32(desc.dwFrameIntervalStep),
-		FrameIntervalType:       uint8(desc.bFrameIntervalType),
-		BytesPerLine:            uint32(desc.dwBytesPerLine),
-		// Intervals: []uint32,
+	for desc := d.desc.frame_descs; desc != nil; desc = desc.next {
+		descs = append(descs, &FrameDescriptor{
+			desc:                    desc,
+			Subtype:                 VSDescSubType(desc.bDescriptorSubtype),
+			FrameIndex:              uint8(desc.bFrameIndex),
+			Capabilities:            uint8(desc.bmCapabilities),
+			Width:                   uint16(desc.wWidth),
+			Height:                  uint16(desc.wHeight),
+			MinBitRate:              uint32(desc.dwMinBitRate),
+			MaxBitRate:              uint32(desc.dwMaxBitRate),
+			MaxVideoFrameBufferSize: uint32(desc.dwMaxVideoFrameBufferSize),
+			DefaultFrameInterval:    uint32(desc.dwDefaultFrameInterval),
+			MinFrameInterval:        uint32(desc.dwMinFrameInterval),
+			MaxFrameInterval:        uint32(desc.dwMaxFrameInterval),
+			FrameIntervalStep:       uint32(desc.dwFrameIntervalStep),
+			FrameIntervalType:       uint8(desc.bFrameIntervalType),
+			BytesPerLine:            uint32(desc.dwBytesPerLine),
+			// Intervals: []uint32,
+		})
 	}
+	return
 }
 
 func (d *FormatDescriptor) String() string {
