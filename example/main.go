@@ -100,9 +100,7 @@ func main() {
 	}
 }
 
-func writeFrameFile(r io.ReadCloser, name string) error {
-	defer r.Close()
-
+func writeFrameFile(r io.Reader, name string) error {
 	f, err := os.Create(name)
 	if err != nil {
 		return err

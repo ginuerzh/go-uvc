@@ -44,7 +44,7 @@ const (
 )
 
 // Frame is an image frame received from the UVC device.
-// It implements io.ReadCloser, it should be closed after consuming frame data.
+// It implements io.Reader.
 type Frame struct {
 	// Width of image in pixels
 	Width int
@@ -67,27 +67,17 @@ type Frame struct {
 	//  Metadata for this frame if available
 	Metadata []byte
 
-	frame     *C.struct_uvc_frame
-	needClose bool
+	frame *C.struct_uvc_frame
 }
 
 func (fr *Frame) Read(b []byte) (int, error) {
 	return fr.data.Read(b)
 }
 
-func (fr *Frame) Close() error {
-	if fr.needClose {
-		C.uvc_free_frame(fr.frame)
-	}
-	fr.data = nil
-	return nil
-}
-
 //export goFrameCB
 func goFrameCB(frame *C.struct_uvc_frame, p unsafe.Pointer) {
 	fc := pointer.Restore(p).(chan *Frame)
 
-	needClose := false
 	switch FrameFormat(frame.frame_format) {
 	case FRAME_FORMAT_YUYV:
 		bgr := C.uvc_allocate_frame(C.size_t(frame.width * frame.height * 3))
@@ -95,14 +85,13 @@ func goFrameCB(frame *C.struct_uvc_frame, p unsafe.Pointer) {
 			log.Println("unable to allocate bgr frame")
 			return
 		}
+		defer C.uvc_free_frame(bgr)
+
 		r := C.uvc_any2bgr(frame, bgr)
 		if err := newError(ErrorType(r)); err != nil {
 			log.Println(err)
-			C.uvc_free_frame(bgr)
 			return
 		}
-		// should free allocated frame when consumed
-		needClose = true
 		frame = bgr
 	}
 
@@ -116,8 +105,7 @@ func goFrameCB(frame *C.struct_uvc_frame, p unsafe.Pointer) {
 		CaptureTime:  time.Unix(int64(frame.capture_time.tv_sec), int64(frame.capture_time.tv_usec)*1000),
 		data:         bytes.NewReader(C.GoBytes(unsafe.Pointer(frame.data), C.int(frame.data_bytes))),
 		// Metadata:     C.GoBytes(unsafe.Pointer(frame.metadata), C.int(frame.metadata_bytes)),
-		frame:     frame,
-		needClose: needClose,
+		frame: frame,
 	}
 
 	select {
